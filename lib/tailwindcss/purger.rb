@@ -1,8 +1,14 @@
 class Tailwindcss::Purger
-  CLASS_NAME_PATTERN       = /([:A-Za-z0-9_-]+[\.\\\/:A-Za-z0-9_-]*)/
-  OPENING_SELECTOR_PATTERN = /\..*\{/
-  CLOSING_SELECTOR_PATTERN = /\s*\}/
-  NEWLINE = "\n"
+  CLASS_NAME_PATTERN = /[:A-Za-z0-9_-]+[\.]*[\\\/:A-Za-z0-9_-]*/
+
+  COMMENT = %r"/[*].*?[*]/"m
+  COMMENT_OR_WHITESPACE = /\s*#{COMMENT}?\s*/
+  TERMINATOR = /[{};]#{COMMENT_OR_WHITESPACE}\z/
+  DISCARDABLE = /\A#{COMMENT_OR_WHITESPACE}\z/
+  BLOCK_START = /\{\s*\z/
+  BLOCK_END = /\A\s*\}/
+  AT_RULE = /\A\s*@/
+  NON_CLASS = /[^.\s,{]+/
 
   attr_reader :keep_these_class_names
 
@@ -12,11 +18,11 @@ class Tailwindcss::Purger
     end
 
     def extract_class_names(string)
-      string.scan(CLASS_NAME_PATTERN).flatten.uniq.sort
+      string.scan(CLASS_NAME_PATTERN).uniq.sort!
     end
 
     def extract_class_names_from(files)
-      Array(files).flat_map { |file| extract_class_names(file.read) }.uniq.sort
+      Array(files).flat_map { |file| extract_class_names(file.read) }.uniq.sort!
     end
   end
 
@@ -25,40 +31,53 @@ class Tailwindcss::Purger
   end
 
   def purge(input)
-    inside_kept_selector = inside_ignored_selector = false
-    output = []
+    output = +""
+    pending_line = nil
+    @pending_output = []
 
-    input.split(NEWLINE).each do |line|
-      case
-      when inside_kept_selector
-        output << line
-        inside_kept_selector = false if line =~ CLOSING_SELECTOR_PATTERN
-      when inside_ignored_selector
-        inside_ignored_selector = false if line =~ CLOSING_SELECTOR_PATTERN
-      when line =~ OPENING_SELECTOR_PATTERN
-        if keep_these_class_names.include? class_name_in(line)
-          output << line
-          inside_kept_selector = true
-        else
-          inside_ignored_selector = true
-        end
-      else
+    input.each_line do |line|
+      line, pending_line = (pending_line << line), nil if pending_line
+
+      if line.match?(TERMINATOR)
+        process_line(line, output)
+      elsif !line.match?(DISCARDABLE)
+        pending_line = line
+      end
+    end
+
+    output
+  end
+
+  private
+    def selector_pattern
+      @selector_pattern ||= begin
+        classes = @keep_these_class_names.join("|").gsub(%r"[:./]") { |c| Regexp.escape "\\#{c}" }
+        /(?:\A|,)(?:\s*(?:#{NON_CLASS}|[.](?:#{classes})(?=[:\s,{])))+(?=\s*[,{])/
+      end
+    end
+
+    def process_line(line, output)
+      line.gsub!(COMMENT, "") #????
+
+      if BLOCK_START.match?(line)
+        @pending_output << purge_block_start(line)
+      elsif !@pending_output.empty? && BLOCK_END.match?(line)
+        @pending_output.pop
+      elsif @pending_output.last != ""
+        output << @pending_output.shift until @pending_output.empty?
         output << line
       end
     end
 
-    separated_without_empty_lines(output)
-  end
-
-  private
-    def class_name_in(line)
-      CLASS_NAME_PATTERN.match(line)[1]
-        .remove("\\")
-        .remove(/:(focus|hover)(-within)?/)
-        .remove("::placeholder").remove("::-moz-placeholder").remove(":-ms-input-placeholder")
-    end
-
-    def separated_without_empty_lines(output)
-      output.reject { |line| line.strip.empty? }.join(NEWLINE)
+    def purge_block_start(line)
+      if AT_RULE.match?(line)
+        line
+      elsif !line.include?(",")
+        selector_pattern.match?(line) ? line : ""
+      else
+        purged = line.scan(selector_pattern).join
+        (purged << " {\n").delete_prefix!(",") unless purged.empty?
+        purged
+      end
     end
 end

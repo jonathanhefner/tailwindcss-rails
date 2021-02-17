@@ -13,15 +13,37 @@ class Tailwindcss::PurgerTest < ActiveSupport::TestCase
 
   test "basic purge" do
     purged = purged_tailwind_from_fixtures
-  
+
     assert purged !~ /.mt-6 \{/
-  
+
     assert purged =~ /.mt-5 \{/
     assert purged =~ /.sm\\:px-6 \{/
     assert purged =~ /.translate-x-1\\\/2 \{/
     assert purged =~ /.mt-10 \{/
     assert purged =~ /.my-1\\.5 \{/
     assert purged =~ /.sm\\:py-0\\.5 \{/
+  end
+
+  test "purge handles compound selectors" do
+    purged = purged_tailwind_from_fixtures
+
+    assert purged !~ /.group-hover\\:text-gray-100/
+
+    assert purged =~ /.group:hover .group-hover\\:text-gray-500 \{/
+  end
+
+  test "purge removes selectors that aren't on the same line as their block brace" do
+    purged = purged_tailwind_from_fixtures
+
+    assert purged !~ /.aspect-w-1,/
+    assert purged !~ /,\s*@media/
+
+    assert purged =~ /.aspect-w-9[, ]/
+  end
+
+  test "purge removes empty blocks" do
+    purged = purged_tailwind_from_fixtures
+    assert purged !~ /\{\s*\}/
   end
 
   test "purge shouldn't remove hover or focus classes" do
@@ -41,12 +63,12 @@ class Tailwindcss::PurgerTest < ActiveSupport::TestCase
 
   private
     def purged_tailwind_from_fixtures
-      purged_tailwind_from Pathname(__dir__).glob("fixtures/*.html.erb")
+      $purged_tailwind_from_fixtures ||= purged_tailwind_from Pathname(__dir__).glob("fixtures/*.html.erb")
     end
 
     def purged_tailwind_from files
       Tailwindcss::Purger.purge \
-        Pathname.new(__FILE__).join("../../app/assets/stylesheets/tailwind.css").read, 
+        Pathname.new(__FILE__).join("../../app/assets/stylesheets/tailwind.css").read,
         keeping_class_names_from_files: files
     end
 end
